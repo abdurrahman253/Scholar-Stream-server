@@ -74,7 +74,11 @@ app.get('/scholarships-top', async (req, res) => {
 })
 
 
-
+      // get all scholarships from db
+    app.get('/scholarships', async (req, res) => {
+      const result = await scholarshipCollection.find().toArray()
+      res.send(result)
+    })
 
     // Send a ping to confirm a successful connection
     await client.db('admin').command({ ping: 1 })
