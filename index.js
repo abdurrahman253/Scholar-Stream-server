@@ -123,8 +123,10 @@ async function run() {
 
 
   // POST: Add new scholarship (Admin only + image upload)
+ // POST: Add new scholarship (Admin only + image upload)
 app.post('/scholarships', verifyJWT, verifyAdmin, upload.single('image'), async (req, res) => {
   try {
+
     const {
       name,
       university,
@@ -144,31 +146,28 @@ app.post('/scholarships', verifyJWT, verifyAdmin, upload.single('image'), async 
 
     // Validation
     if (!name || !university || !country || !city || !worldRank || 
-        !subjectCategory || !scholarshipCategory || !degree || 
-        !applicationFees || !serviceCharge || !deadline || !postDate || !userEmail) {
+        !subjectCategory || !degree || !applicationFees || 
+        !serviceCharge || !deadline || !userEmail) {
       return res.status(400).send({ 
         success: false, 
         message: 'All required fields must be provided' 
       });
     }
 
-    const totalAmount = parseFloat(applicationFees) + parseFloat(serviceCharge);
-
     const scholarshipData = {
-      name: name.trim(),
-      university: university.trim(),
-      country: country.trim(),
-      city: city.trim(),
+      scholarshipName: name.trim(), // 👈 Changed to scholarshipName
+      universityName: university.trim(), // 👈 Changed to universityName
+      universityCountry: country.trim(), // 👈 Added university prefix
+      universityCity: city.trim(), // 👈 Added university prefix
       worldRank: parseInt(worldRank),
       subjectCategory: subjectCategory.trim(),
-      scholarshipCategory: scholarshipCategory.trim(),
+      scholarshipCategory: scholarshipCategory?.trim() || 'General',
       degree: degree.trim(),
-      tuitionFees: tuitionFees ? parseFloat(tuitionFees) : null,
+      tuitionFees: tuitionFees ? parseFloat(tuitionFees) : 0,
       applicationFees: parseFloat(applicationFees),
       serviceCharge: parseFloat(serviceCharge),
-      totalAmount,
-      deadline: new Date(deadline),
-      postDate: new Date(postDate),
+      applicationDeadline: new Date(deadline), // 👈 Changed to applicationDeadline
+      postDate: new Date(postDate || Date.now()),
       userEmail: userEmail.trim(),
       createdAt: new Date(),
       createdBy: req.tokenEmail, 
@@ -177,19 +176,24 @@ app.post('/scholarships', verifyJWT, verifyAdmin, upload.single('image'), async 
 
     // Image handling
     if (req.file) {
-      scholarshipData.image = `/uploads/${req.file.filename}`;
+      scholarshipData.universityImage = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    } else {
+      scholarshipData.universityImage = 'https://via.placeholder.com/400x300?text=University';
     }
+
 
     const result = await scholarshipCollection.insertOne(scholarshipData);
 
-    res.send({
+   
+
+    res.status(201).send({
       success: true,
       message: 'Scholarship added successfully!',
       scholarshipId: result.insertedId
     });
 
   } catch (error) {
-    console.error('Add scholarship error:', error);
+    console.error('❌ Add scholarship error:', error);
     res.status(500).send({ 
       success: false, 
       message: 'Failed to add scholarship',
