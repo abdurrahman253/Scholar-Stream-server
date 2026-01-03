@@ -726,73 +726,40 @@ app.post('/retry-payment/:applicationId', verifyJWT, async (req, res) => {
 
 
 // GET: Admin Statistics
-app.get('/admin/statistics', verifyJWT, async (req, res) => {
+app.get('/admin/statistics', verifyJWT, verifyAdmin, async (req, res) => {
   try {
-    // Verify admin role (আপনার auth system অনুযায়ী adjust করুন)
-    // const user = await usersCollection.findOne({ email: req.tokenEmail });
-    // if (user?.role !== 'admin') {
-    //   return res.status(403).send({ message: 'Forbidden Access' });
-    // }
+    // ১. Parallel ভাবে ছোট কাউন্টগুলো নেওয়া (Performance Optimization)
+    const [totalUsers, totalScholarships, totalApplications] = await Promise.all([
+      db.collection('users').countDocuments(),
+      scholarshipCollection.countDocuments(),
+      applicationsCollection.countDocuments()
+    ]);
 
-    // Total Users Count
-    const totalUsers = await db.collection('users').countDocuments();
+    // ২. Total Revenue Calculation
+    const revenueStats = await applicationsCollection.aggregate([
+      { $match: { paymentStatus: 'paid' } },
+      { $group: { _id: null, total: { $sum: "$totalAmount" } } }
+    ]).toArray();
+    const totalFeesCollected = revenueStats[0]?.total || 0;
 
-    // Total Scholarships Count
-    const totalScholarships = await scholarshipCollection.countDocuments();
-
-    // Total Fees Collected (শুধুমাত্র paid applications)
-    const paidApplications = await applicationsCollection
-      .find({ paymentStatus: 'paid' })
-      .toArray();
-    
-    const totalFeesCollected = paidApplications.reduce(
-      (sum, app) => sum + (app.totalAmount || 0),
-      0
-    );
-
-    // Total Applications
-    const totalApplications = await applicationsCollection.countDocuments();
-
-    // Applications by University
-    const applicationsByUniversity = await applicationsCollection.aggregate([
-      {
-        $group: {
-          _id: '$universityName',
-          count: { $sum: 1 }
-        }
-      },
+    // ৩. Applications by University
+    const appsByUni = await applicationsCollection.aggregate([
+      { $group: { _id: '$universityName', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
       { $limit: 10 }
     ]).toArray();
 
-    // Applications by Scholarship Category
-    const applicationsByCategory = await applicationsCollection.aggregate([
-      {
-        $group: {
-          _id: '$scholarshipCategory',
-          count: { $sum: 1 }
-        }
-      },
+    // ৪. Applications by Category
+    const appsByCat = await applicationsCollection.aggregate([
+      { $group: { _id: '$scholarshipCategory', count: { $sum: 1 } } },
       { $sort: { count: -1 } }
     ]).toArray();
 
-    // Applications by Subject Category
-    const applicationsBySubject = await applicationsCollection.aggregate([
-      {
-        $group: {
-          _id: '$subjectCategory',
-          count: { $sum: 1 }
-        }
-      },
-      { $sort: { count: -1 } },
-      { $limit: 8 }
-    ]).toArray();
-
-    // Monthly Revenue (last 6 months)
+    // ৫. Monthly Revenue 
     const sixMonthsAgo = new Date();
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-    const monthlyRevenue = await applicationsCollection.aggregate([
+    const monthlyRev = await applicationsCollection.aggregate([
       {
         $match: {
           paymentStatus: 'paid',
@@ -801,15 +768,14 @@ app.get('/admin/statistics', verifyJWT, async (req, res) => {
       },
       {
         $group: {
-          _id: {
-            year: { $year: '$paidAt' },
-            month: { $month: '$paidAt' }
+          _id: { 
+            year: { $year: "$paidAt" }, 
+            month: { $month: "$paidAt" } 
           },
-          revenue: { $sum: '$totalAmount' },
-          count: { $sum: 1 }
+          revenue: { $sum: "$totalAmount" }
         }
       },
-      { $sort: { '_id.year': 1, '_id.month': 1 } }
+      { $sort: { "_id.year": 1, "_id.month": 1 } }
     ]).toArray();
 
     res.send({
@@ -817,34 +783,18 @@ app.get('/admin/statistics', verifyJWT, async (req, res) => {
       statistics: {
         totalUsers,
         totalScholarships,
-        totalFeesCollected: parseFloat(totalFeesCollected.toFixed(2)),
         totalApplications,
-        applicationsByUniversity: applicationsByUniversity.map(item => ({
-          name: item._id || 'Unknown',
-          count: item.count
-        })),
-        applicationsByCategory: applicationsByCategory.map(item => ({
-          name: item._id || 'Unknown',
-          count: item.count
-        })),
-        applicationsBySubject: applicationsBySubject.map(item => ({
-          name: item._id || 'Unknown',
-          count: item.count
-        })),
-        monthlyRevenue: monthlyRevenue.map(item => ({
-          month: `${item._id.year}-${String(item._id.month).padStart(2, '0')}`,
-          revenue: parseFloat(item.revenue.toFixed(2)),
-          count: item.count
+        totalFeesCollected: totalFeesCollected.toFixed(2),
+        applicationsByUniversity: appsByUni.map(i => ({ name: i._id || 'Unknown', count: i.count })),
+        applicationsByCategory: appsByCat.map(i => ({ name: i._id || 'Unknown', count: i.count })),
+        monthlyRevenue: monthlyRev.map(i => ({
+          month: `${i._id.year}-${String(i._id.month).padStart(2, '0')}`,
+          revenue: i.revenue
         }))
       }
     });
   } catch (error) {
-    console.error('Error fetching admin statistics:', error);
-    res.status(500).send({
-      success: false,
-      message: 'Failed to fetch statistics',
-      error: error.message
-    });
+    res.status(500).send({ success: false, message: error.message });
   }
 });
 
