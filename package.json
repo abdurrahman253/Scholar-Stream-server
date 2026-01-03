@@ -19,6 +19,7 @@
     "firebase-admin": "^13.6.0",
     "mongodb": "^7.0.0",
     "multer": "^2.0.2",
-    "stripe": "^20.1.0"
+    "stripe": "^20.1.0",
+    "sweetalert2": "^11.26.17"
   }
 }

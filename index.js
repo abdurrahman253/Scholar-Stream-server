@@ -46,28 +46,49 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 
-// JWT Middleware
+//  JWT Middleware 
+
 const verifyJWT = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).send({ message: 'Unauthorized Access! No token provided' });
+    return res.status(401).send({ 
+      success: false,
+      message: 'Unauthorized Access! No token provided' 
+    });
   }
 
-  const token = authHeader.split('Bearer ')[1]?.trim(); // <-- Critical: split on 'Bearer ' (with space)
+  const token = authHeader.split('Bearer ')[1]?.trim();
 
   if (!token) {
-    return res.status(401).send({ message: 'Unauthorized Access! Empty token' });
+    return res.status(401).send({ 
+      success: false,
+      message: 'Unauthorized Access! Empty token' 
+    });
   }
 
   try {
     const decoded = await admin.auth().verifyIdToken(token);
     req.tokenEmail = decoded.email;
-    req.userUid = decoded.uid; // Optional: useful later
+    req.userUid = decoded.uid;
+    req.userRole = decoded.role || 'student';
     next();
   } catch (err) {
     console.error('Token verification failed:', err.message);
-    return res.status(401).send({ message: 'Unauthorized Access! Invalid or expired token' });
+    
+    // 🔥 Check if token expired
+    if (err.code === 'auth/id-token-expired') {
+      return res.status(401).send({ 
+        success: false,
+        message: 'Token expired. Please refresh your session.',
+        code: 'TOKEN_EXPIRED'
+      });
+    }
+    
+    return res.status(401).send({ 
+      success: false,
+      message: 'Unauthorized Access! Invalid token' 
+    });
   }
 };
 
@@ -107,6 +128,8 @@ async function run() {
         res.status(500).send({ message: 'Error verifying role' });
       }
     };
+
+
 
     const verifyAdmin = async (req, res, next) => {
       try {
@@ -349,73 +372,6 @@ app.delete('/scholarships/:id', verifyJWT, verifyAdmin, async (req, res) => {
     });
 
 
-    // reviews routes from here
-
-    // GET: Reviews for scholarship
-    app.get('/reviews/:scholarshipId', async (req, res) => {
-      try {
-        const { scholarshipId } = req.params;
-        if (!ObjectId.isValid(scholarshipId)) {
-          return res.status(400).send({ message: 'Invalid scholarship ID' });
-        }
-        const reviews = await reviewsCollection
-          .find({ scholarshipId: new ObjectId(scholarshipId) })
-          .sort({ reviewDate: -1 })
-          .toArray();
-
-        const averageRating = reviews.length > 0
-          ? reviews.reduce((sum, review) => sum + review.ratingPoint, 0) / reviews.length
-          : 0;
-
-        res.send({
-          success: true,
-          reviews,
-          averageRating: parseFloat(averageRating.toFixed(1)),
-          totalReviews: reviews.length
-        });
-      } catch (error) {
-        console.error('Error fetching reviews:', error);
-        res.status(500).send({
-          success: false,
-          message: 'Failed to fetch reviews',
-          error: error.message
-        });
-      }
-    });
-
-    // POST: Add review (with JWT)
-    app.post('/reviews', verifyJWT, async (req, res) => {
-      try {
-        const reviewData = req.body;
-        if (!reviewData.scholarshipId || !reviewData.ratingPoint || !reviewData.reviewComment) {
-          return res.status(400).send({
-            success: false,
-            message: 'Required fields missing'
-          });
-        }
-        if (!ObjectId.isValid(reviewData.scholarshipId)) {
-          return res.status(400).send({ message: 'Invalid scholarship ID' });
-        }
-
-        reviewData.scholarshipId = new ObjectId(reviewData.scholarshipId);
-        reviewData.reviewDate = new Date();
-        reviewData.userEmail = req.tokenEmail; // Add email for moderation
-
-        const result = await reviewsCollection.insertOne(reviewData);
-        res.status(201).send({
-          success: true,
-          message: 'Review added successfully',
-          reviewId: result.insertedId
-        });
-      } catch (error) {
-        console.error('Error adding review:', error);
-        res.status(500).send({
-          success: false,
-          message: 'Failed to add review',
-          error: error.message
-        });
-      }
-    });
 
 
 
@@ -969,20 +925,86 @@ app.delete('/applications/:id', verifyJWT, async (req, res) => {
 });
 
 // === Reviews Routes ===
-// GET: All reviews (Moderator)
-app.get('/reviews/all', verifyJWT, verifyModeratorOrAdmin, async (req, res) => {
-  const reviews = await reviewsCollection.find({}).sort({ reviewDate: -1 }).toArray();
-  res.send(reviews);
+
+
+// 1️⃣ All reviews (Moderator + Admin only)
+
+
+   // POST: Add review (with JWT)
+app.post('/reviews', verifyJWT, async (req, res) => {
+  try {
+    const {
+      scholarshipId,
+      ratingPoint,
+      reviewComment,
+      scholarshipName,
+      userName,
+      userImage   
+    } = req.body;
+
+    if (!scholarshipId || !ratingPoint || !reviewComment || !scholarshipName) {
+      return res.status(400).send({
+        success: false,
+        message: 'Required fields missing'
+      });
+    }
+
+    if (!ObjectId.isValid(scholarshipId)) {
+      return res.status(400).send({ message: 'Invalid scholarship ID' });
+    }
+
+    const reviewData = {
+      scholarshipId: new ObjectId(scholarshipId),
+      scholarshipName: scholarshipName.trim(),
+      ratingPoint: parseInt(ratingPoint),
+      reviewComment: reviewComment.trim(),
+      reviewDate: new Date(),
+      userEmail: req.tokenEmail,
+      userName: userName || 'Anonymous',
+      userImage: userImage || ''   
+    };
+
+    const result = await reviewsCollection.insertOne(reviewData);
+
+    res.status(201).send({
+      success: true,
+      message: 'Review added successfully',
+      reviewId: result.insertedId
+    });
+  } catch (error) {
+    console.error('Error adding review:', error);
+    res.status(500).send({
+      success: false,
+      message: 'Failed to add review'
+    });
+  }
 });
 
-// GET: My reviews (Student)
-app.get('/reviews/my', verifyJWT, async (req, res) => {
-  const reviews = await reviewsCollection
-    .find({ userEmail: req.tokenEmail })
-    .sort({ reviewDate: -1 })
-    .toArray();
-  res.send(reviews);
+
+app.get('/reviews/all', verifyJWT, verifyModeratorOrAdmin, async (req, res) => {
+  try {
+    const reviews = await reviewsCollection.find({}).sort({ reviewDate: -1 }).toArray();
+    return res.status(200).json(reviews);
+  } catch (error) {
+    console.error('❌ Reviews error:', error);
+    return res.status(500).json({ message: 'Failed to fetch reviews' });
+  }
 });
+
+// 2️⃣ My reviews (Student)
+app.get('/reviews/my', verifyJWT, async (req, res) => {
+  try {
+    const reviews = await reviewsCollection
+      .find({ userEmail: req.tokenEmail })
+      .sort({ reviewDate: -1 })
+      .toArray();
+    return res.status(200).json(reviews);
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to fetch reviews' });
+  }
+});
+
+
 
 // PATCH: Update review
 app.patch('/reviews/:id', verifyJWT, async (req, res) => {
@@ -1000,16 +1022,52 @@ app.patch('/reviews/:id', verifyJWT, async (req, res) => {
   }
 });
 
-// DELETE: Review (Moderator or Owner)
+
+// DELETE: Review (Moderator or Admin can delete any, student only own)
 app.delete('/reviews/:id', verifyJWT, verifyModeratorOrAdmin, async (req, res) => {
   const { id } = req.params;
   const review = await reviewsCollection.findOne({ _id: new ObjectId(id) });
-  // Moderator can delete any, student only own
-  if (review.userEmail === req.tokenEmail || req.userRole === 'moderator') {
-    await reviewsCollection.deleteOne({ _id: new ObjectId(id) });
-    res.send({ success: true });
+  
+  if (!review) return res.status(404).send({ message: 'Review not found' });
+
+  
+  if (req.userRole === 'moderator' || req.userRole === 'admin' || review.userEmail === req.userEmail) {
+    const result = await reviewsCollection.deleteOne({ _id: new ObjectId(id) });
+    res.send(result);
   } else {
-    res.status(403).send({ message: 'Forbidden' });
+    res.status(403).send({ message: 'Forbidden access' });
+  }
+});
+
+
+
+// 3️⃣ Reviews by scholarship ID (Dynamic route - MUST BE LAST)
+app.get('/reviews/:scholarshipId', async (req, res) => {
+  try {
+    const { scholarshipId } = req.params;
+    
+    if (!ObjectId.isValid(scholarshipId)) {
+      return res.status(400).json({ message: 'Invalid scholarship ID' });
+    }
+    
+    const reviews = await reviewsCollection
+      .find({ scholarshipId: new ObjectId(scholarshipId) })
+      .sort({ reviewDate: -1 })
+      .toArray();
+
+    const averageRating = reviews.length > 0
+      ? reviews.reduce((sum, review) => sum + review.ratingPoint, 0) / reviews.length
+      : 0;
+
+    return res.status(200).json({
+      success: true,
+      reviews,
+      averageRating: parseFloat(averageRating.toFixed(1)),
+      totalReviews: reviews.length
+    });
+  } catch (error) {
+    console.error('Error:', error);
+    return res.status(500).json({ message: 'Failed to fetch reviews' });
   }
 });
 
