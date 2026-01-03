@@ -225,6 +225,109 @@ app.post('/scholarships', verifyJWT, verifyAdmin, upload.single('image'), async 
       res.send(result);
     });
 
+
+// PATCH: Update scholarship (Admin only + optional image upload)
+app.patch('/scholarships/:id', verifyJWT, verifyAdmin, upload.single('image'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: 'Invalid scholarship ID' });
+    }
+
+    const updateData = {};
+
+    // Current field names in your DB
+    const fieldMap = {
+      name: 'scholarshipName',
+      university: 'universityName',
+      country: 'universityCountry',
+      city: 'universityCity',
+      worldRank: 'universityWorldRank',
+      subjectCategory: 'subjectCategory',
+      scholarshipCategory: 'scholarshipCategory',
+      degree: 'degree',
+      tuitionFees: 'tuitionFees',
+      applicationFees: 'applicationFees',
+      serviceCharge: 'serviceCharge',
+      deadline: 'applicationDeadline',
+      postDate: 'postDate',
+      userEmail: 'postedUserEmail',
+      stipend: 'stipend',
+      scholarshipDescription: 'scholarshipDescription'
+    };
+
+    // Map incoming form fields to actual DB field names
+    Object.keys(fieldMap).forEach(formKey => {
+      if (req.body[formKey] !== undefined && req.body[formKey] !== '') {
+        const dbKey = fieldMap[formKey];
+
+        if (dbKey === 'worldRank') {
+          updateData[dbKey] = parseInt(req.body[formKey]);
+        } else if (['applicationFees', 'serviceCharge', 'tuitionFees', 'stipend'].includes(dbKey)) {
+          updateData[dbKey] = parseFloat(req.body[formKey]) || 0;
+        } else if (['applicationDeadline', 'postDate'].includes(dbKey)) {
+          updateData[dbKey] = new Date(req.body[formKey]);
+        } else {
+          updateData[dbKey] = req.body[formKey].trim();
+        }
+      }
+    });
+
+    // Recalculate totalAmount if fees changed
+    const appFee = parseFloat(req.body.applicationFees) || 0;
+    const servFee = parseFloat(req.body.serviceCharge) || 0;
+    if (req.body.applicationFees || req.body.serviceCharge) {
+      updateData.totalAmount = appFee + servFee;
+    }
+
+    // Handle image update
+    if (req.file) {
+      updateData.universityImage = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).send({ success: false, message: 'No data provided to update' });
+    }
+
+    const result = await scholarshipCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ success: false, message: 'Scholarship not found' });
+    }
+
+    res.send({ success: true, message: 'Scholarship updated successfully!' });
+  } catch (error) {
+    console.error('Update scholarship error:', error);
+    res.status(500).send({ success: false, message: 'Failed to update scholarship' });
+  }
+});
+
+// DELETE: Delete scholarship (Admin only)
+app.delete('/scholarships/:id', verifyJWT, verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: 'Invalid scholarship ID' });
+    }
+
+    const result = await scholarshipCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ success: false, message: 'Scholarship not found' });
+    }
+
+    res.send({ success: true, message: 'Scholarship deleted successfully!' });
+  } catch (error) {
+    console.error('Delete scholarship error:', error);
+    res.status(500).send({ success: false, message: 'Failed to delete scholarship' });
+  }
+});
+
+    
+
     // GET: Single scholarship
     app.get('/scholarships/:id', async (req, res) => {
       try {
