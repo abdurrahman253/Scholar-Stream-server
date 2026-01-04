@@ -148,10 +148,48 @@ async function run() {
             } catch (error) { res.status(500).send({ success: false, message: error.message }); }
         });
 
-        app.get('/scholarships', async (req, res) => {
-            const result = await scholarshipCollection.find().toArray();
-            res.send(result);
-        });
+       // backend/server.js (Updated with Search, Filter, Sort, Pagination for /scholarships)
+
+app.get('/scholarships', async (req, res) => {
+  try {
+    const { page = 1, limit = 10, search = '', country = '', category = '', sortBy = 'postDate', sortOrder = 'desc' } = req.query;
+
+    const query = {};
+    if (search) {
+      query.$or = [
+        { scholarshipName: { $regex: search, $options: 'i' } },
+        { universityName: { $regex: search, $options: 'i' } },
+        { degree: { $regex: search, $options: 'i' } }
+      ];
+    }
+    if (country) {
+      query.universityCountry = { $regex: country, $options: 'i' };
+    }
+    if (category) {
+      query.scholarshipCategory = { $regex: category, $options: 'i' };
+    }
+
+    const sort = {};
+    sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const [scholarships, total] = await Promise.all([
+      scholarshipCollection.find(query).sort(sort).skip(skip).limit(parseInt(limit)).toArray(),
+      scholarshipCollection.countDocuments(query)
+    ]);
+
+    res.send({
+      success: true,
+      scholarships,
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      totalPages: Math.ceil(total / limit)
+    });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
 
         app.get('/scholarships-top', async (req, res) => {
             const top = await scholarshipCollection.find().sort({ applicationFees: 1 }).limit(6).toArray();
