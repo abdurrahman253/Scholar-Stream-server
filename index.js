@@ -17,11 +17,30 @@ admin.initializeApp({
 const app = express();
 
 // Middleware
-app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:5174', process.env.CLIENT_URL].filter(Boolean),
-    credentials: true,
-    optionsSuccessStatus: 200,
-}));
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "https://scholar-stream-client-side-six.vercel.app"
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, false); 
+      }
+    },
+    credentials: true
+  })
+);
+
+// preflight fix
+app.options("*", cors());
+
 app.use(express.json());
 
 
