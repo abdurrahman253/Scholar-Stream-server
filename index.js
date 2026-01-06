@@ -6,6 +6,8 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const admin = require('firebase-admin');
 const port = process.env.PORT || 3000;
 
+const app = express();
+
 // ========================
 // Firebase Admin Setup
 // ========================
@@ -22,10 +24,7 @@ try {
   }
 } catch (err) {
   console.error("❌ Firebase initialization error:", err.message);
-  // Don't crash - continue without Firebase
 }
-
-const app = express();
 
 // ========================
 // CORS Configuration
@@ -33,8 +32,9 @@ const app = express();
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
+  process.env.CLIENT_URL,
   "https://scholar-stream-client-side-six.vercel.app"
-];
+].filter(Boolean);
 
 app.use(
   cors({
@@ -53,10 +53,9 @@ app.use(
 app.options("*", cors());
 
 // ========================
-// Middleware
+// Middleware - Conditional JSON Parsing
 // ========================
 app.use((req, res, next) => {
-  // Skip JSON parsing for webhook route
   if (req.path === '/stripe-webhook') {
     next();
   } else {
@@ -65,17 +64,62 @@ app.use((req, res, next) => {
 });
 
 // ========================
+// MongoDB Connection (Singleton Pattern)
+// ========================
+let cachedClient = null;
+let cachedDb = null;
+
+async function connectToDatabase() {
+  if (cachedDb && cachedClient) {
+    return { db: cachedDb, client: cachedClient };
+  }
+
+  if (!process.env.MONGODB_URI) {
+    throw new Error('MONGODB_URI is not defined');
+  }
+
+  const client = new MongoClient(process.env.MONGODB_URI, {
+    serverApi: {
+      version: ServerApiVersion.v1,
+      strict: true,
+      deprecationErrors: true,
+    },
+  });
+
+  await client.connect();
+  const db = client.db(process.env.DB_NAME || 'scholarstream');
+
+  cachedClient = client;
+  cachedDb = db;
+
+  console.log('✅ Connected to MongoDB');
+  return { db, client };
+}
+
+// ========================
+// Collections Helper
+// ========================
+async function getCollections() {
+  const { db } = await connectToDatabase();
+  return {
+    scholarshipCollection: db.collection('scholarships'),
+    reviewsCollection: db.collection('reviews'),
+    applicationsCollection: db.collection('applications'),
+    usersCollection: db.collection('users')
+  };
+}
+
+// ========================
 // JWT Verification
 // ========================
 const verifyJWT = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).send({ success: false, message: 'Unauthorized Access!' });
-  }
-  
-  const token = authHeader.split('Bearer ')[1]?.trim();
-  
   try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).send({ success: false, message: 'Unauthorized Access!' });
+    }
+    
+    const token = authHeader.split('Bearer ')[1]?.trim();
     const decodedToken = await admin.auth().verifyIdToken(token);
     req.tokenEmail = decodedToken.email;
     req.userUid = decodedToken.uid;
@@ -93,48 +137,11 @@ const verifyJWT = async (req, res, next) => {
 };
 
 // ========================
-// MongoDB Connection
-// ========================
-let client;
-let db;
-let scholarshipCollection;
-let reviewsCollection;
-let applicationsCollection;
-let usersCollection;
-
-async function connectDB() {
-  if (db) return db; // Return existing connection
-  
-  try {
-    client = new MongoClient(process.env.MONGODB_URI, {
-      serverApi: { 
-        version: ServerApiVersion.v1, 
-        strict: true, 
-        deprecationErrors: true 
-      },
-    });
-    
-    await client.connect();
-    console.log('✅ MongoDB Connected');
-    
-    db = client.db(process.env.DB_NAME);
-    scholarshipCollection = db.collection('scholarships');
-    reviewsCollection = db.collection('reviews');
-    applicationsCollection = db.collection('applications');
-    usersCollection = db.collection('users');
-    
-    return db;
-  } catch (error) {
-    console.error('❌ MongoDB connection error:', error);
-    throw error;
-  }
-}
-
-// ========================
 // Role Verification Middlewares
 // ========================
 const verifyModerator = async (req, res, next) => {
   try {
+    const { usersCollection } = await getCollections();
     const user = await usersCollection.findOne({ email: req.tokenEmail });
     if (!user || (user.role !== 'moderator' && user.role !== 'admin')) {
       return res.status(403).send({ message: 'Forbidden: Restricted Access' });
@@ -142,19 +149,20 @@ const verifyModerator = async (req, res, next) => {
     req.userRole = user.role;
     next();
   } catch (error) {
-    res.status(500).send({ message: 'Error verifying role' });
+    res.status(500).send({ message: 'Error verifying role', error: error.message });
   }
 };
 
 const verifyAdmin = async (req, res, next) => {
   try {
+    const { usersCollection } = await getCollections();
     const user = await usersCollection.findOne({ email: req.tokenEmail });
     if (!user || user.role !== 'admin') {
       return res.status(403).send({ message: 'Forbidden: Admin Only' });
     }
     next();
   } catch (error) {
-    res.status(500).send({ message: 'Error verifying admin' });
+    res.status(500).send({ message: 'Error verifying admin', error: error.message });
   }
 };
 
@@ -163,11 +171,12 @@ const verifyAdmin = async (req, res, next) => {
 // ========================
 app.get('/', async (req, res) => {
   try {
-    await connectDB();
+    await connectToDatabase();
     res.send({ 
       status: 'OK', 
-      message: 'Scholarship Server Running...', 
-      timestamp: new Date().toISOString() 
+      message: 'Scholar Stream Backend Running', 
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development'
     });
   } catch (error) {
     res.status(500).send({ 
@@ -182,7 +191,7 @@ app.get('/', async (req, res) => {
 // ========================
 app.post('/users', async (req, res) => {
   try {
-    await connectDB();
+    const { usersCollection } = await getCollections();
     const { email, name, photoURL } = req.body;
     
     if (!email) {
@@ -216,7 +225,7 @@ app.post('/users', async (req, res) => {
 
 app.get('/users', verifyJWT, verifyAdmin, async (req, res) => {
   try {
-    await connectDB();
+    const { usersCollection } = await getCollections();
     const users = await usersCollection.find().toArray();
     res.send(users);
   } catch (error) {
@@ -226,7 +235,7 @@ app.get('/users', verifyJWT, verifyAdmin, async (req, res) => {
 
 app.get('/user/role', verifyJWT, async (req, res) => {
   try {
-    await connectDB();
+    const { usersCollection } = await getCollections();
     const user = await usersCollection.findOne({ email: req.tokenEmail });
     res.send({ role: user?.role || 'student' });
   } catch (error) {
@@ -236,7 +245,7 @@ app.get('/user/role', verifyJWT, async (req, res) => {
 
 app.patch('/users/:id/role', verifyJWT, verifyAdmin, async (req, res) => {
   try {
-    await connectDB();
+    const { usersCollection } = await getCollections();
     await usersCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
       { $set: { role: req.body.role } }
@@ -249,7 +258,7 @@ app.patch('/users/:id/role', verifyJWT, verifyAdmin, async (req, res) => {
 
 app.delete('/users/:id', verifyJWT, verifyAdmin, async (req, res) => {
   try {
-    await connectDB();
+    const { usersCollection } = await getCollections();
     await usersCollection.deleteOne({ _id: new ObjectId(req.params.id) });
     res.send({ success: true });
   } catch (error) {
@@ -262,7 +271,7 @@ app.delete('/users/:id', verifyJWT, verifyAdmin, async (req, res) => {
 // ========================
 app.post('/scholarships', verifyJWT, verifyModerator, async (req, res) => {
   try {
-    await connectDB();
+    const { scholarshipCollection } = await getCollections();
     const data = req.body;
     
     const scholarshipData = {
@@ -293,7 +302,7 @@ app.post('/scholarships', verifyJWT, verifyModerator, async (req, res) => {
 
 app.get('/scholarships', async (req, res) => {
   try {
-    await connectDB();
+    const { scholarshipCollection } = await getCollections();
     const { 
       page = 1, 
       limit = 10, 
@@ -352,7 +361,7 @@ app.get('/scholarships', async (req, res) => {
 
 app.get('/scholarships-top', async (req, res) => {
   try {
-    await connectDB();
+    const { scholarshipCollection } = await getCollections();
     const top = await scholarshipCollection
       .find()
       .sort({ applicationFees: 1 })
@@ -366,7 +375,7 @@ app.get('/scholarships-top', async (req, res) => {
 
 app.get('/scholarships/:id', async (req, res) => {
   try {
-    await connectDB();
+    const { scholarshipCollection } = await getCollections();
     if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).send({ message: 'Invalid ID' });
     }
@@ -383,7 +392,7 @@ app.get('/scholarships/:id', async (req, res) => {
 
 app.patch('/scholarships/:id', verifyJWT, verifyAdmin, async (req, res) => {
   try {
-    await connectDB();
+    const { scholarshipCollection } = await getCollections();
     const { id } = req.params;
     
     if (!ObjectId.isValid(id)) {
@@ -469,7 +478,7 @@ app.patch('/scholarships/:id', verifyJWT, verifyAdmin, async (req, res) => {
 
 app.delete('/scholarships/:id', verifyJWT, verifyAdmin, async (req, res) => {
   try {
-    await connectDB();
+    const { scholarshipCollection } = await getCollections();
     const { id } = req.params;
     
     if (!ObjectId.isValid(id)) {
@@ -505,7 +514,7 @@ app.delete('/scholarships/:id', verifyJWT, verifyAdmin, async (req, res) => {
 // ========================
 app.post('/create-checkout-session', verifyJWT, async (req, res) => {
   try {
-    await connectDB();
+    const { applicationsCollection } = await getCollections();
     const {
       scholarshipId,
       scholarshipName,
@@ -627,40 +636,40 @@ app.post('/stripe-webhook', express.raw({ type: 'application/json' }), async (re
   let event;
 
   try {
-    await connectDB();
+    const { applicationsCollection } = await getCollections();
     event = stripe.webhooks.constructEvent(
       req.body, 
       sig, 
       process.env.STRIPE_WEBHOOK_SECRET
     );
+
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+
+      await applicationsCollection.updateOne(
+        { stripeSessionId: session.id },
+        {
+          $set: {
+            paymentStatus: 'paid',
+            status: 'pending',
+            paidAt: new Date()
+          }
+        }
+      );
+
+      console.log(`✅ Payment completed for session: ${session.id}`);
+    }
+
+    res.json({ received: true });
   } catch (err) {
     console.log(`⚠️ Webhook Error: ${err.message}`);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
-
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-
-    await applicationsCollection.updateOne(
-      { stripeSessionId: session.id },
-      {
-        $set: {
-          paymentStatus: 'paid',
-          status: 'pending',
-          paidAt: new Date()
-        }
-      }
-    );
-
-    console.log(`✅ Payment completed for session: ${session.id}`);
-  }
-
-  res.json({ received: true });
 });
 
 app.get('/verify-payment/:sessionId', verifyJWT, async (req, res) => {
   try {
-    await connectDB();
+    const { applicationsCollection } = await getCollections();
     const { sessionId } = req.params;
 
     const session = await stripe.checkout.sessions.retrieve(sessionId);
@@ -723,7 +732,7 @@ app.get('/verify-payment/:sessionId', verifyJWT, async (req, res) => {
 
 app.get('/my-applications', verifyJWT, async (req, res) => {
   try {
-    await connectDB();
+    const { applicationsCollection } = await getCollections();
     const applications = await applicationsCollection
       .find({ 'applicant.email': req.tokenEmail })
       .sort({ applicationDate: -1 })
@@ -744,7 +753,7 @@ app.get('/my-applications', verifyJWT, async (req, res) => {
 
 app.post('/retry-payment/:applicationId', verifyJWT, async (req, res) => {
   try {
-    await connectDB();
+    const { applicationsCollection } = await getCollections();
     const { applicationId } = req.params;
 
     const application = await applicationsCollection.findOne({
@@ -809,7 +818,7 @@ app.post('/retry-payment/:applicationId', verifyJWT, async (req, res) => {
 
 app.get('/applications/all', verifyJWT, verifyModerator, async (req, res) => {
   try {
-    await connectDB();
+    const { applicationsCollection } = await getCollections();
     const apps = await applicationsCollection
       .find({})
       .sort({ applicationDate: -1 })
@@ -822,7 +831,7 @@ app.get('/applications/all', verifyJWT, verifyModerator, async (req, res) => {
 
 app.patch('/applications/:id/status', verifyJWT, verifyModerator, async (req, res) => {
   try {
-    await connectDB();
+    const { applicationsCollection } = await getCollections();
     const { status } = req.body;
     const { id } = req.params;
 
@@ -839,7 +848,7 @@ app.patch('/applications/:id/status', verifyJWT, verifyModerator, async (req, re
 
 app.patch('/applications/:id/feedback', verifyJWT, verifyModerator, async (req, res) => {
   try {
-    await connectDB();
+    const { applicationsCollection } = await getCollections();
     const { feedback } = req.body;
     const { id } = req.params;
 
@@ -856,15 +865,15 @@ app.patch('/applications/:id/feedback', verifyJWT, verifyModerator, async (req, 
 
 app.delete('/applications/:id', verifyJWT, async (req, res) => {
   try {
-    await connectDB();
+    const { applicationsCollection } = await getCollections();
     const { id } = req.params;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).send({ message: 'Invalid application ID' });
     }
 
-    const app = await applicationsCollection.findOne({ 
-      _id: new ObjectId(id) 
+    const app = await applicationsCollection.findOne({
+      _id: new ObjectId(id)
     });
 
     if (!app) {
@@ -876,8 +885,8 @@ app.delete('/applications/:id', verifyJWT, async (req, res) => {
     }
 
     if (app.status !== 'pending') {
-      return res.status(403).send({ 
-        message: 'Cannot delete non-pending applications' 
+      return res.status(403).send({
+        message: 'Cannot delete non-pending applications'
       });
     }
 
@@ -901,7 +910,7 @@ app.delete('/applications/:id', verifyJWT, async (req, res) => {
 // ========================
 app.post('/reviews', verifyJWT, async (req, res) => {
   try {
-    await connectDB();
+    const { reviewsCollection } = await getCollections();
     const reviewData = {
       ...req.body,
       scholarshipId: new ObjectId(req.body.scholarshipId),
@@ -909,7 +918,7 @@ app.post('/reviews', verifyJWT, async (req, res) => {
       reviewDate: new Date(),
       userEmail: req.tokenEmail
     };
-    
+
     const result = await reviewsCollection.insertOne(reviewData);
     res.status(201).send({ success: true, reviewId: result.insertedId });
   } catch (error) {
@@ -919,7 +928,7 @@ app.post('/reviews', verifyJWT, async (req, res) => {
 
 app.get('/reviews/all', verifyJWT, verifyModerator, async (req, res) => {
   try {
-    await connectDB();
+    const { reviewsCollection } = await getCollections();
     const reviews = await reviewsCollection
       .find({})
       .sort({ reviewDate: -1 })
@@ -932,7 +941,7 @@ app.get('/reviews/all', verifyJWT, verifyModerator, async (req, res) => {
 
 app.get('/reviews/my', verifyJWT, async (req, res) => {
   try {
-    await connectDB();
+    const { reviewsCollection } = await getCollections();
     const reviews = await reviewsCollection
       .find({ userEmail: req.tokenEmail })
       .sort({ reviewDate: -1 })
@@ -945,7 +954,7 @@ app.get('/reviews/my', verifyJWT, async (req, res) => {
 
 app.patch('/reviews/:id', verifyJWT, async (req, res) => {
   try {
-    await connectDB();
+    const { reviewsCollection } = await getCollections();
     const { id } = req.params;
     const filter = { _id: new ObjectId(id), userEmail: req.tokenEmail };
     const updateDoc = {
@@ -954,13 +963,13 @@ app.patch('/reviews/:id', verifyJWT, async (req, res) => {
         reviewComment: req.body.reviewComment
       }
     };
-    
+
     const result = await reviewsCollection.updateOne(filter, updateDoc);
-    
+
     if (result.matchedCount === 0) {
       return res.status(403).send({ message: 'Unauthorized' });
     }
-    
+
     res.send({ success: true });
   } catch (error) {
     res.status(500).send({ message: error.message });
@@ -969,12 +978,12 @@ app.patch('/reviews/:id', verifyJWT, async (req, res) => {
 
 app.delete('/reviews/:id', verifyJWT, async (req, res) => {
   try {
-    await connectDB();
+    const { reviewsCollection, usersCollection } = await getCollections();
     const { id } = req.params;
-    const review = await reviewsCollection.findOne({ 
-      _id: new ObjectId(id) 
+    const review = await reviewsCollection.findOne({
+      _id: new ObjectId(id)
     });
-    
+
     if (!review) {
       return res.status(404).send({ message: 'Review not found' });
     }
@@ -986,7 +995,7 @@ app.delete('/reviews/:id', verifyJWT, async (req, res) => {
       await reviewsCollection.deleteOne({ _id: new ObjectId(id) });
       return res.send({ success: true });
     }
-    
+
     res.status(403).send({ message: 'Forbidden' });
   } catch (error) {
     res.status(500).send({ message: error.message });
@@ -998,8 +1007,12 @@ app.delete('/reviews/:id', verifyJWT, async (req, res) => {
 // ========================
 app.get('/admin/statistics', verifyJWT, verifyAdmin, async (req, res) => {
   try {
-    await connectDB();
-    
+    const { 
+      usersCollection, 
+      scholarshipCollection, 
+      applicationsCollection 
+    } = await getCollections();
+
     const [totalUsers, totalScholarships, totalApplications] = await Promise.all([
       usersCollection.countDocuments(),
       scholarshipCollection.countDocuments(),
@@ -1010,7 +1023,7 @@ app.get('/admin/statistics', verifyJWT, verifyAdmin, async (req, res) => {
       { $match: { paymentStatus: 'paid' } },
       { $group: { _id: null, total: { $sum: "$totalAmount" } } }
     ]).toArray();
-    
+
     const totalFeesCollected = revenueStats[0]?.total || 0;
 
     const appsByUni = await applicationsCollection.aggregate([
@@ -1085,25 +1098,16 @@ app.use((err, req, res, next) => {
 });
 
 // ========================
-// Initialize and Start Server
+// 404 Handler
 // ========================
-const startServer = async () => {
-  try {
-    await connectDB();
-    console.log('✅ Database connection established');
-    
-    app.listen(port, () => {
-      console.log(`✅ Server running on port ${port}`);
-    });
-  } catch (error) {
-    console.error('❌ Failed to start server:', error);
-    process.exit(1);
-  }
-};
+app.use((req, res) => {
+  res.status(404).send({
+    success: false,
+    message: 'Route not found'
+  });
+});
 
-// For Vercel serverless functions
-if (process.env.VERCEL) {
-  module.exports = app;
-} else {
-  startServer();
-}
+// ========================
+// Export for Vercel
+// ========================
+module.exports = app;
