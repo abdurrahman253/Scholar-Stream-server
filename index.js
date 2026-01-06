@@ -229,7 +229,8 @@ app.patch('/scholarships/:id', verifyJWT, verifyAdmin, async (req, res) => {
       deadline: 'applicationDeadline',
       postDate: 'postDate',
       stipend: 'stipend',
-      scholarshipDescription: 'scholarshipDescription'
+      scholarshipDescription: 'scholarshipDescription',
+      universityImage: 'universityImage'
     };
 
     // Map incoming form fields to actual DB field names
