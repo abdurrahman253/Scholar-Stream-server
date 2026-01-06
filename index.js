@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
-const multer = require('multer');
 const path = require('path');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const admin = require('firebase-admin');
@@ -24,7 +23,6 @@ app.use(cors({
     optionsSuccessStatus: 200,
 }));
 app.use(express.json());
-app.use('/uploads', express.static('uploads'));
 
 // Multer Storage config
 const storage = multer.diskStorage({
@@ -130,23 +128,36 @@ async function run() {
         // ========================
         // SCHOLARSHIP ROUTES
         // ========================
-        app.post('/scholarships', verifyJWT, verifyModerator, upload.single('image'), async (req, res) => {
-            try {
-                const data = req.body;
-                const scholarshipData = {
-                    ...data,
-                    worldRank: parseInt(data.worldRank),
-                    applicationFees: parseFloat(data.applicationFees),
-                    serviceCharge: parseFloat(data.serviceCharge),
-                    applicationDeadline: new Date(data.deadline),
-                    postDate: new Date(),
-                    postedBy: req.tokenEmail, // Using token email
-                    universityImage: req.file ? `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}` : 'placeholder_url'
-                };
-                const result = await scholarshipCollection.insertOne(scholarshipData);
-                res.status(201).send({ success: true, scholarshipId: result.insertedId });
-            } catch (error) { res.status(500).send({ success: false, message: error.message }); }
-        });
+       app.post('/scholarships', verifyJWT, verifyAdmin, async (req, res) => {
+    try {
+        const data = req.body;
+        
+       
+        const scholarshipData = {
+            scholarshipName: data.scholarshipName,
+            universityName: data.universityName,
+            universityCountry: data.universityCountry,
+            universityCity: data.universityCity,
+            universityWorldRank: parseInt(data.universityWorldRank),
+            subjectCategory: data.subjectCategory,
+            scholarshipCategory: data.scholarshipCategory,
+            degree: data.degree,
+            tuitionFees: parseFloat(data.tuitionFees || 0),
+            applicationFees: parseFloat(data.applicationFees),
+            serviceCharge: parseFloat(data.serviceCharge),
+            applicationDeadline: new Date(data.applicationDeadline),
+            totalAmount: parseFloat(data.totalAmount),
+            universityImage: data.universityImage, 
+            postedUserEmail: data.postedUserEmail,
+            postDate: new Date()
+        };
+
+        const result = await scholarshipCollection.insertOne(scholarshipData);
+        res.status(201).send({ success: true, scholarshipId: result.insertedId });
+    } catch (error) { 
+        res.status(500).send({ success: false, message: error.message }); 
+    }
+});
 
   
 
