@@ -50,7 +50,6 @@ app.use(
   })
 );
 
-app.options("*", cors());
 
 // ========================
 // Middleware - Conditional JSON Parsing
