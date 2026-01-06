@@ -204,7 +204,7 @@ app.get('/scholarships', async (req, res) => {
         });
 
        
-app.patch('/scholarships/:id', verifyJWT, verifyAdmin, upload.single('image'), async (req, res) => {
+app.patch('/scholarships/:id', verifyJWT, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) {
@@ -259,10 +259,6 @@ app.patch('/scholarships/:id', verifyJWT, verifyAdmin, upload.single('image'), a
       updateData.totalAmount = appFee + servFee;
     }
 
-    // Handle image update
-    if (req.file) {
-      updateData.universityImage = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
-    }
 
     if (Object.keys(updateData).length === 0) {
       return res.status(400).send({ success: false, message: 'No data provided to update' });
@@ -304,75 +300,7 @@ app.delete('/scholarships/:id', verifyJWT, verifyAdmin, async (req, res) => {
     res.status(500).send({ success: false, message: 'Failed to delete scholarship' });
   }
 });
-        // ========================
-        // APPLICATION ROUTES
-        // ========================
-        app.post('/create-checkout-session', verifyJWT, async (req, res) => {
-            try {
-                const { scholarshipId, totalAmount, scholarshipName, universityImage } = req.body;
-                const session = await stripe.checkout.sessions.create({
-                    payment_method_types: ['card'],
-                    mode: 'payment',
-                    success_url: `${process.env.CLIENT_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-                    cancel_url: `${process.env.CLIENT_URL}/payment-cancel`,
-                    customer_email: req.tokenEmail, // Secure email from token
-                    line_items: [{
-                        price_data: {
-                            currency: 'usd',
-                            product_data: { name: scholarshipName, images: [universityImage] },
-                            unit_amount: Math.round(totalAmount * 100),
-                        },
-                        quantity: 1,
-                    }],
-                });
-
-                const applicationData = {
-                    ...req.body,
-                    scholarshipId: new ObjectId(scholarshipId),
-                    applicantEmail: req.tokenEmail, // Securely store user email
-                    paymentStatus: 'pending',
-                    stripeSessionId: session.id,
-                    status: 'pending',
-                    applicationDate: new Date()
-                };
-                await applicationsCollection.insertOne(applicationData);
-                res.send({ success: true, url: session.url, sessionId: session.id });
-            } catch (error) { res.status(500).send({ success: false, error: error.message }); }
-        });
-
-        app.get('/my-applications', verifyJWT, async (req, res) => {
-            try {
-       
-                const applications = await applicationsCollection.find({ 
-                      'applicant.email': req.tokenEmail 
-               }).toArray();
         
-               res.send({ success: true, applications });
-         } catch (error) {
-               res.status(500).send({ success: false, message: error.message });
-         }
-       });
-
-        app.patch('/applications/:id/status', verifyJWT, verifyModerator, async (req, res) => {
-            await applicationsCollection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: { status: req.body.status } });
-            res.send({ success: true });
-        });
-
-       app.delete('/applications/:id', verifyJWT, async (req, res) => {
-            const query = { 
-                 _id: new ObjectId(req.params.id), 
-                'applicant.email': req.tokenEmail, 
-                   status: 'pending' 
-             };
-             const result = await applicationsCollection.deleteOne(query);
-                if (result.deletedCount === 0) return res.status(403).send({ message: 'Forbidden or Not found' });
-                  res.send({ success: true });
-        });
-
-
-
-
-
 
 
 
