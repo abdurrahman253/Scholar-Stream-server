@@ -128,11 +128,10 @@ async function run() {
         // ========================
         // SCHOLARSHIP ROUTES
         // ========================
-       app.post('/scholarships', verifyJWT, verifyAdmin, async (req, res) => {
+      app.post('/scholarships', verifyJWT, verifyModerator, async (req, res) => {
     try {
         const data = req.body;
         
-       
         const scholarshipData = {
             scholarshipName: data.scholarshipName,
             universityName: data.universityName,
