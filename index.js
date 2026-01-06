@@ -70,7 +70,7 @@ async function run() {
         const usersCollection = db.collection('users');
 
         // --- Role Verification Middlewares ---
-        const verifyModeratorOrAdmin = async (req, res, next) => {
+        const verifyModerator = async (req, res, next) => {
             const user = await usersCollection.findOne({ email: req.tokenEmail });
             if (!user || (user.role !== 'moderator' && user.role !== 'admin')) {
                 return res.status(403).send({ message: 'Forbidden: Restricted Access' });
@@ -130,7 +130,7 @@ async function run() {
         // ========================
         // SCHOLARSHIP ROUTES
         // ========================
-        app.post('/scholarships', verifyJWT, verifyModeratorOrAdmin, upload.single('image'), async (req, res) => {
+        app.post('/scholarships', verifyJWT, verifyModerator, upload.single('image'), async (req, res) => {
             try {
                 const data = req.body;
                 const scholarshipData = {
@@ -148,7 +148,7 @@ async function run() {
             } catch (error) { res.status(500).send({ success: false, message: error.message }); }
         });
 
-       // backend/server.js (Updated with Search, Filter, Sort, Pagination for /scholarships)
+  
 
 app.get('/scholarships', async (req, res) => {
   try {
@@ -202,7 +202,7 @@ app.get('/scholarships', async (req, res) => {
             res.send(result);
         });
 
-        // PATCH: Update scholarship (Admin only + optional image upload)
+       
 app.patch('/scholarships/:id', verifyJWT, verifyAdmin, upload.single('image'), async (req, res) => {
   try {
     const { id } = req.params;
@@ -352,7 +352,7 @@ app.delete('/scholarships/:id', verifyJWT, verifyAdmin, async (req, res) => {
          }
        });
 
-        app.patch('/applications/:id/status', verifyJWT, verifyModeratorOrAdmin, async (req, res) => {
+        app.patch('/applications/:id/status', verifyJWT, verifyModerator, async (req, res) => {
             await applicationsCollection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: { status: req.body.status } });
             res.send({ success: true });
         });
@@ -692,7 +692,7 @@ app.post('/retry-payment/:applicationId', verifyJWT, async (req, res) => {
 });
 
 // GET: All Applications (Moderator/Admin)
-app.get('/applications/all', verifyJWT, verifyModeratorOrAdmin, async (req, res) => {
+app.get('/applications/all', verifyJWT, verifyModerator, async (req, res) => {
   try {
     const apps = await applicationsCollection
       .find({})
@@ -705,7 +705,7 @@ app.get('/applications/all', verifyJWT, verifyModeratorOrAdmin, async (req, res)
 });
 
 // PATCH: Update Application Status (Moderator/Admin)
-app.patch('/applications/:id/status', verifyJWT, verifyModeratorOrAdmin, async (req, res) => {
+app.patch('/applications/:id/status', verifyJWT, verifyModerator, async (req, res) => {
   const { status } = req.body;
   const { id } = req.params;
   
@@ -718,7 +718,7 @@ app.patch('/applications/:id/status', verifyJWT, verifyModeratorOrAdmin, async (
 });
 
 // PATCH: Add Feedback to Application (Moderator/Admin)
-app.patch('/applications/:id/feedback', verifyJWT, verifyModeratorOrAdmin, async (req, res) => {
+app.patch('/applications/:id/feedback', verifyJWT, verifyModerator, async (req, res) => {
   const { feedback } = req.body;
   const { id } = req.params;
   
@@ -780,7 +780,7 @@ app.delete('/applications/:id', verifyJWT, async (req, res) => {
         });
 
 
-        app.get('/reviews/all', verifyJWT, verifyModeratorOrAdmin, async (req, res) => {
+        app.get('/reviews/all', verifyJWT, verifyModerator, async (req, res) => {
           try {
               const reviews = await reviewsCollection.find({}).sort({ reviewDate: -1 }).toArray();
              res.json(reviews);
@@ -825,10 +825,10 @@ app.delete('/applications/:id', verifyJWT, async (req, res) => {
         // ========================
         // ADMIN STATISTICS
         // ========================
-        // GET: Admin Statistics (Complete Solution)
+      
           app.get('/admin/statistics', verifyJWT, verifyAdmin, async (req, res) => {
   try {
-    // ১. Parallel ভাবে ছোট কাউন্টগুলো নেওয়া (Performance Optimization)
+    
     const [totalUsers, totalScholarships, totalApplications] = await Promise.all([
       db.collection('users').countDocuments(),
       scholarshipCollection.countDocuments(),
