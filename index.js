@@ -662,26 +662,45 @@ app.patch('/applications/:id/feedback', verifyJWT, verifyModerator, async (req, 
 
 // DELETE: Cancel Pending Application (Student)
 app.delete('/applications/:id', verifyJWT, async (req, res) => {
-  const { id } = req.params;
+  try {
+    const { id } = req.params;
+
+   
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: 'Invalid application ID' });
+    }
+
+    const app = await applicationsCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!app) {
+      return res.status(404).send({ message: 'Application not found' });
+    }
+
+ 
+    if (app.applicant.email !== req.tokenEmail) {
+      return res.status(403).send({ message: 'Unauthorized' });
+    }
+
+    if (app.status !== 'pending') {
+      return res.status(403).send({ message: 'Cannot delete non-pending applications' });
+    }
+
+    const result = await applicationsCollection.deleteOne({
+      _id: new ObjectId(id)
+    });
+
   
-  const app = await applicationsCollection.findOne({ _id: new ObjectId(id) });
-  
-  if (!app) {
-    return res.status(404).send({ message: 'Application not found' });
+    if (result.deletedCount === 0) {
+      return res.status(500).send({ message: 'Delete failed' });
+    }
+
+    res.send({ success: true });
+  } catch (error) {
+    console.error('Delete application error:', error);
+    res.status(500).send({ message: 'Server error' });
   }
-  
-  // 🔥 Security: Check ownership and status
-  if (app.applicant.email !== req.tokenEmail) {
-    return res.status(403).send({ message: 'Unauthorized' });
-  }
-  
-  if (app.status !== 'pending') {
-    return res.status(403).send({ message: 'Cannot delete non-pending applications' });
-  }
-  
-  await applicationsCollection.deleteOne({ _id: new ObjectId(id) });
-  res.send({ success: true });
 });
+
 
 
 
